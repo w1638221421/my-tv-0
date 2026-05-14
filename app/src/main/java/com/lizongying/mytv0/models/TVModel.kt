@@ -116,6 +116,8 @@ class TVModel(var tv: TV) : ViewModel() {
             val path = uri.path ?: return@let null
             val scheme = uri.scheme ?: return@let null
 
+            userAgent = ""
+
             val okHttpDataSource = OkHttpDataSource.Factory(HttpClient.okHttpClient)
             tv.headers?.let { i ->
                 okHttpDataSource.setDefaultRequestProperties(i)
@@ -143,7 +145,29 @@ class TVModel(var tv: TV) : ViewModel() {
                 listOf(SourceType.HLS, SourceType.PROGRESSIVE)
             }
 
-            MediaItem.fromUri(it)
+            /*
+             * 直播源稳定性优化：
+             *
+             * targetOffsetMs = 45 秒：目标距离直播边缘 45 秒，减少贴边播放导致的卡顿
+             * minOffsetMs    = 30 秒：最小直播延迟 30 秒
+             * maxOffsetMs    = 180 秒：最大直播延迟 180 秒
+             * 播放速度范围 0.97x ~ 1.03x：允许播放器轻微变速追赶或远离直播边缘
+             *
+             * 优点：网络抖动时更稳
+             * 缺点：直播延迟会增加
+             */
+            MediaItem.Builder()
+                .setUri(it)
+                .setLiveConfiguration(
+                    MediaItem.LiveConfiguration.Builder()
+                        .setTargetOffsetMs(45_000)
+                        .setMinOffsetMs(30_000)
+                        .setMaxOffsetMs(180_000)
+                        .setMinPlaybackSpeed(0.97f)
+                        .setMaxPlaybackSpeed(1.03f)
+                        .build()
+                )
+                .build()
         }
         return _mediaItem
     }
@@ -190,6 +214,7 @@ class TVModel(var tv: TV) : ViewModel() {
 
         return when (getSourceTypeCurrent()) {
             SourceType.HLS -> HlsMediaSource.Factory(httpDataSource).createMediaSource(mediaItem)
+
             SourceType.RTSP -> if (userAgent.isEmpty()) {
                 RtspMediaSource.Factory().createMediaSource(mediaItem)
             } else {
@@ -205,6 +230,7 @@ class TVModel(var tv: TV) : ViewModel() {
             SourceType.RTP -> null
 
             SourceType.DASH -> DashMediaSource.Factory(httpDataSource).createMediaSource(mediaItem)
+
             SourceType.PROGRESSIVE -> ProgressiveMediaSource.Factory(httpDataSource)
                 .createMediaSource(mediaItem)
 
