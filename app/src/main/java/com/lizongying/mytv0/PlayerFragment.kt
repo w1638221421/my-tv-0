@@ -17,6 +17,7 @@ import androidx.media3.common.Player.DISCONTINUITY_REASON_AUTO_TRANSITION
 import androidx.media3.common.Player.REPEAT_MODE_ALL
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
@@ -74,9 +75,33 @@ class PlayerFragment : Fragment() {
             player?.release()
         }
 
+        /*
+         * 直播缓冲优化：
+         *
+         * 参数说明：
+         * 30_000  = minBufferMs，最小缓冲 30 秒
+         * 120_000 = maxBufferMs，最大缓冲 120 秒
+         * 5_000   = bufferForPlaybackMs，首次播放前缓冲 5 秒
+         * 10_000  = bufferForPlaybackAfterRebufferMs，卡顿后缓冲 10 秒再继续播放
+         *
+         * 优点：抗网络抖动能力更强，减少直播隔一会卡一下的问题
+         * 缺点：换台可能稍慢，直播延迟会增加
+         */
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                30_000,
+                120_000,
+                5_000,
+                10_000
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
         player = ExoPlayer.Builder(ctx)
             .setRenderersFactory(renderersFactory)
+            .setLoadControl(loadControl)
             .build()
+
         player?.repeatMode = REPEAT_MODE_ALL
         player?.playWhenReady = true
         player?.addListener(object : Player.Listener {
