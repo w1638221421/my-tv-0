@@ -89,10 +89,10 @@ class PlayerFragment : Fragment() {
          */
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                30_000,
-                120_000,
-                5_000,
-                10_000
+                45_000,
+                180_000,
+                8_000,
+                15_000
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
