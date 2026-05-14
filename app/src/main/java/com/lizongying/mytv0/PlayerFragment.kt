@@ -17,6 +17,7 @@ import androidx.media3.common.Player.DISCONTINUITY_REASON_AUTO_TRANSITION
 import androidx.media3.common.Player.REPEAT_MODE_ALL
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLivePlaybackSpeedControl
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -68,7 +69,11 @@ class PlayerFragment : Fragment() {
         val playerMediaCodecSelector = PlayerMediaCodecSelector()
         renderersFactory.setMediaCodecSelector(playerMediaCodecSelector)
         renderersFactory.setExtensionRendererMode(
-            if (SP.softDecode) DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER else DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
+            if (SP.softDecode) {
+                DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+            } else {
+                DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
+            }
         )
 
         if (player != null) {
@@ -78,14 +83,13 @@ class PlayerFragment : Fragment() {
         /*
          * 直播缓冲优化：
          *
-         * 参数说明：
-         * 30_000  = minBufferMs，最小缓冲 30 秒
-         * 120_000 = maxBufferMs，最大缓冲 120 秒
-         * 5_000   = bufferForPlaybackMs，首次播放前缓冲 5 秒
-         * 10_000  = bufferForPlaybackAfterRebufferMs，卡顿后缓冲 10 秒再继续播放
+         * 45_000  = minBufferMs，最小缓冲 45 秒
+         * 180_000 = maxBufferMs，最大缓冲 180 秒
+         * 8_000   = bufferForPlaybackMs，首次播放前缓冲 8 秒
+         * 15_000  = bufferForPlaybackAfterRebufferMs，卡顿后缓冲 15 秒再继续播放
          *
-         * 优点：抗网络抖动能力更强，减少直播隔一会卡一下的问题
-         * 缺点：换台可能稍慢，直播延迟会增加
+         * 优点：抗网络抖动更强
+         * 缺点：换台可能更慢，直播延迟会增加
          */
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
@@ -97,9 +101,23 @@ class PlayerFragment : Fragment() {
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
+        /*
+         * 直播速度控制：
+         *
+         * 当直播流贴近 live edge 时，源站或网络轻微抖动就容易卡。
+         * 这里允许播放器在 0.97x ~ 1.03x 之间轻微调整播放速度。
+         * 每次发生 rebuffer 后，目标直播延迟增加 10 秒，避免继续贴边播放。
+         */
+        val livePlaybackSpeedControl = DefaultLivePlaybackSpeedControl.Builder()
+            .setFallbackMinPlaybackSpeed(0.97f)
+            .setFallbackMaxPlaybackSpeed(1.03f)
+            .setTargetLiveOffsetIncrementOnRebufferMs(10_000)
+            .build()
+
         player = ExoPlayer.Builder(ctx)
             .setRenderersFactory(renderersFactory)
             .setLoadControl(loadControl)
+            .setLivePlaybackSpeedControl(livePlaybackSpeedControl)
             .build()
 
         player?.repeatMode = REPEAT_MODE_ALL
@@ -232,15 +250,31 @@ class PlayerFragment : Fragment() {
                 requiresSecureDecoder,
                 requiresTunnelingDecoder
             )
+
+            /*
+             * H265 解码优化：
+             *
+             * 原代码强制优先使用 c2.android.hevc.decoder。
+             * 这个解码器在不少设备上可能是系统软解，直播 H265 时容易 CPU 高、发热、卡顿。
+             *
+             * 现在逻辑：
+             * 1. 如果用户没有打开软解，优先过滤掉常见软解；
+             * 2. 如果设备有硬解，就返回硬解列表；
+             * 3. 如果没有硬解，再回退 ExoPlayer 默认列表。
+             */
             if (mimeType == MimeTypes.VIDEO_H265 && !requiresSecureDecoder && !requiresTunnelingDecoder) {
-                if (infos.isNotEmpty()) {
-                    val infosNew = infos.find { it.name == "c2.android.hevc.decoder" }
-                        ?.let { mutableListOf(it) }
-                    if (infosNew != null) {
-                        return infosNew
+                if (!SP.softDecode) {
+                    val hardwareInfos = infos.filterNot {
+                        it.name.startsWith("c2.android.", ignoreCase = true) ||
+                                it.name.startsWith("OMX.google.", ignoreCase = true)
+                    }
+
+                    if (hardwareInfos.isNotEmpty()) {
+                        return hardwareInfos.toMutableList()
                     }
                 }
             }
+
             return infos
         }
     }
